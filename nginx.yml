@@ -1,0 +1,169 @@
+---
+kind: ConfigMap
+apiVersion: v1
+metadata:
+  name: nginx-config
+data:
+  nginx.conf: |
+    events {
+    }
+
+    http {
+      server {
+        listen 80 default_server;
+        listen [::]:80 default_server;
+        
+        root /var/www/html;
+        index index.html index.htm index.php;
+        server_name _;
+
+        location / {
+          rewrite .* /index.php;
+        }
+
+        location ~ \.php$ {
+          include fastcgi_params;
+          fastcgi_index index.php;
+          fastcgi_pass 127.0.0.1:9000;
+          fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+          fastcgi_param REQUEST_METHOD \$request_method;
+        }
+      }
+    }
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: nginx-pv
+  labels:
+    type: local
+spec:
+  storageClassName: standard
+  persistentVolumeReclaimPolicy: Retain
+  capacity:
+    storage: 750Mi
+  accessModes:
+    - ReadWriteOnce
+  hostPath:
+    path: "/mnt/data"	
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: nginx-pv-claim
+spec:
+  storageClassName: standard
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 550Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-wp-dp
+  labels:
+    app: lemp
+    tier: frontend
+spec:
+  selector:
+    matchLabels:
+      app: lemp
+      tier: frontend
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app: lemp
+        tier: frontend
+    spec:
+      containers:
+      - image: nginx:latest
+        name: nginx-container
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-root-pass
+              key: password
+        - name: MYSQL_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: mysql-db-url
+              key: database
+        - name: MYSQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: mysql-user-pass
+              key: username
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-user-pass
+              key: password
+        - name: MYSQL_HOST
+          valueFrom:
+            secretKeyRef:
+              name: mysql-host
+              key: host
+        volumeMounts:
+        - name: shared-files
+          mountPath: /var/www/html	
+        - name: nginx-config-volume
+          mountPath: /etc/nginx/nginx.conf
+          subPath: nginx.conf
+      - image: wordpress:php7.2-fpm 
+        name: php-fpm-container
+        env:
+        - name: MYSQL_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-root-pass
+              key: password
+        - name: MYSQL_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: mysql-db-url
+              key: database
+        - name: MYSQL_USER
+          valueFrom:
+            secretKeyRef:
+              name: mysql-user-pass
+              key: username
+        - name: MYSQL_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mysql-user-pass
+              key: password
+        - name: MYSQL_HOST
+          valueFrom:
+            secretKeyRef:
+              name: mysql-host
+              key: host
+        volumeMounts:
+        - name: shared-files
+          mountPath: /var/www/html
+      volumes:
+      - name: nginx-persistent-storage 
+        persistentVolumeClaim:
+          claimName: nginx-pv-claim	  
+      - name: shared-files 
+        emptyDir: {}
+      - name: nginx-config-volume
+        configMap:
+          name: nginx-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nginx-service
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 80
+    nodePort: 30008
+  selector:
+    tier: frontend
